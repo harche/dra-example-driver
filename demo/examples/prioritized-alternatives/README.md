@@ -91,6 +91,24 @@ not anything defined in the claim. A subrequest whose selector matches zero
 devices cannot be satisfied, so the scheduler moves on to the next one in the
 list.
 
+## Config Scoping with Subrequests
+
+When a request is satisfied via `firstAvailable`, the allocation result records
+the chosen subrequest as `<request>/<subrequest>` (e.g. `gpu/older-gpu`). An
+opaque config's `requests` list can reference either form, and both claims use
+one to show the difference:
+
+- **pod0**: the config names the parent request `gpu`, so it applies no matter
+  which subrequest the scheduler selects. The container sees
+  `TIMESLICE_INTERVAL=Long`.
+- **pod1**: a parent-scoped fallback config (`gpu`, interval `Long`) followed
+  by one config per subrequest, each named by its full `gpu/<subrequest>`
+  reference. Matching carries no specificity ranking — the last matching
+  config in the list wins — so the config for the chosen subrequest
+  `gpu/latest-gpu` applies and the container sees `TIMESLICE_INTERVAL=Short`
+  (not `Long` from the parent-scoped config, nor `Medium`, which is scoped to
+  the unchosen `gpu/older-gpu`).
+
 ## Requirements
 
 ### Driver Requirements
@@ -144,6 +162,11 @@ list.
   gpu/older-gpu     # pod0 fell back to the only satisfiable subrequest
   gpu/latest-gpu    # pod1 preferred the higher-priority subrequest
   ```
+
+- **Config Scoping**: The `grep GPU_DEVICE` output shows the opaque config
+  that won for each pod's chosen subrequest (see "Config Scoping with
+  Subrequests" above): `TIMESLICE_INTERVAL="Long"` for pod0 and
+  `TIMESLICE_INTERVAL="Short"` for pod1.
 
 ## Cleanup
 

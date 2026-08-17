@@ -22,6 +22,11 @@
 # Together these mirror KEP-4816 user story 1: prefer a high-end GPU, but accept
 # a less specialized one if the preferred options are not available.
 #
+# Each claim also carries opaque configs demonstrating how configs are scoped
+# when a request is satisfied via a subrequest; see "Config Scoping with
+# Subrequests" in README.md. The configs are asserted by the firstAvailable
+# e2e case in test/e2e/e2e_test.go -- keep them in sync.
+#
 # Expected: each pod gets exactly 1 GPU. pod0 is satisfied via "older-gpu" and
 # pod1 via "latest-gpu".
 # Check the GPUs were injected:
@@ -72,6 +77,19 @@ spec:
               expression: "device.capacity['gpu.example.com'].memory.compareTo(quantity('1Ti')) >= 0"
         - name: older-gpu
           deviceClassName: gpu.example.com
+      config:
+      # Scoped to the parent request name, so it applies to whichever
+      # subrequest the scheduler selects.
+      - requests: ["gpu"]
+        opaque:
+          driver: gpu.example.com
+          parameters:
+            apiVersion: gpu.resource.example.com/v1alpha1
+            kind: GpuConfig
+            sharing:
+              strategy: TimeSlicing
+              timeSlicingConfig:
+                interval: Long
 
 ---
 # pod1: preference. Both subrequests match, so the scheduler chooses the
@@ -94,6 +112,41 @@ spec:
               expression: "device.attributes['gpu.example.com'].model == 'LATEST-GPU-MODEL'"
         - name: older-gpu
           deviceClassName: gpu.example.com
+      config:
+      # A parent-scoped fallback plus one config per subrequest. The last
+      # matching config wins, so the config for the chosen subrequest
+      # "gpu/latest-gpu" (Short) applies -- not the parent-scoped fallback
+      # (Long) or the config for the unchosen "gpu/older-gpu" (Medium).
+      - requests: ["gpu"]
+        opaque:
+          driver: gpu.example.com
+          parameters:
+            apiVersion: gpu.resource.example.com/v1alpha1
+            kind: GpuConfig
+            sharing:
+              strategy: TimeSlicing
+              timeSlicingConfig:
+                interval: Long
+      - requests: ["gpu/older-gpu"]
+        opaque:
+          driver: gpu.example.com
+          parameters:
+            apiVersion: gpu.resource.example.com/v1alpha1
+            kind: GpuConfig
+            sharing:
+              strategy: TimeSlicing
+              timeSlicingConfig:
+                interval: Medium
+      - requests: ["gpu/latest-gpu"]
+        opaque:
+          driver: gpu.example.com
+          parameters:
+            apiVersion: gpu.resource.example.com/v1alpha1
+            kind: GpuConfig
+            sharing:
+              strategy: TimeSlicing
+              timeSlicingConfig:
+                interval: Short
 
 ---
 apiVersion: v1

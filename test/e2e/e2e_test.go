@@ -223,6 +223,32 @@ var _ = Describe("Test GPU allocation", func() {
 		verifyChosenSubrequest(ctx, namespace, "pod0", "gpu", drv.DriverName, "gpu/older-gpu")
 		// pod1 has two satisfiable subrequests, so the higher-priority one wins.
 		verifyChosenSubrequest(ctx, namespace, "pod1", "gpu", drv.DriverName, "gpu/latest-gpu")
+
+		// The allocation result's request is recorded as
+		// "<request>/<subrequest>", so opaque configs must match through the
+		// subrequest reference. The single-member groups below only check
+		// each pod's sharing properties; GPU distinctness across the pods is
+		// already asserted by verifyGPUAllocation above.
+		//
+		// pod0's config names the parent request "gpu" and must apply to the
+		// "gpu/older-gpu" result.
+		verifySharedGPUGroup(ctx, namespace, sharingGroup{
+			members:           []podContainer{{pod: "pod0", container: containerName}},
+			expectedStrategy:  string(gpuv1alpha1.TimeSlicingStrategy),
+			expectedProperty:  "TIMESLICE_INTERVAL",
+			expectedPropValue: string(gpuv1alpha1.LongTimeSlice),
+		})
+		// pod1 layers a parent-scoped config ("gpu", Long) under one config
+		// per subrequest; the last matching config wins, so the config for
+		// the chosen subrequest "gpu/latest-gpu" (Short) must apply — not
+		// the parent-scoped fallback (Long) or the config for the unchosen
+		// "gpu/older-gpu" (Medium).
+		verifySharedGPUGroup(ctx, namespace, sharingGroup{
+			members:           []podContainer{{pod: "pod1", container: containerName}},
+			expectedStrategy:  string(gpuv1alpha1.TimeSlicingStrategy),
+			expectedProperty:  "TIMESLICE_INTERVAL",
+			expectedPropValue: string(gpuv1alpha1.ShortTimeSlice),
+		})
 	})
 
 	It("Should share 1 GPU among the Pods in each of 2 PodGroups", func(ctx SpecContext) {
