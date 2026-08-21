@@ -20,6 +20,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"time"
 
 	resourceapi "k8s.io/api/resource/v1"
@@ -125,9 +127,52 @@ func (d *driver) prepareResourceClaim(ctx context.Context, claim *resourceapi.Re
 		})
 	}
 
+	if err := holdDeclaredOverhead(ctx, string(claim.UID)); err != nil {
+		logger.Error(err, "Error allocating declared overhead for claim", "uid", claim.UID)
+		result = kubeletplugin.PrepareResult{
+			Err: fmt.Errorf("error allocating declared overhead for claim %v: %w", claim.UID, err),
+		}
+		return result
+	}
+
 	logger.Info("Returning newly prepared devices for claim", "uid", claim.UID, "devices", prepared)
 	result = kubeletplugin.PrepareResult{Devices: prepared}
 	return result
+}
+
+// holdDeclaredOverhead makes the driver actually consume the hugepage
+// overhead it declares in its ResourceSlices (KEP-5517): allocated when the
+// claim is prepared, held until the claim is unprepared at pod termination.
+// The DRA kubelet plugin API offers no other lifecycle events, in
+// particular none when an individual container exits.
+func holdDeclaredOverhead(ctx context.Context, claimUID string) error {
+	pages := os.Getenv("HOLD_OVERHEAD_PAGES")
+	if pages == "" || pages == "0" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "-C", "--",
+		"/opt/dra-demo/hugehold", "acquire", claimUID, pages)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("hugehold acquire: %w: %s", err, out)
+	}
+	klog.FromContext(ctx).Info("Driver is holding declared hugepage overhead until unprepare",
+		"uid", claimUID, "pages", pages, "output", string(out))
+	return nil
+}
+
+func releaseDeclaredOverhead(ctx context.Context, claimUID string) error {
+	if v := os.Getenv("HOLD_OVERHEAD_PAGES"); v == "" || v == "0" {
+		return nil
+	}
+	cmd := exec.CommandContext(ctx, "nsenter", "-t", "1", "-m", "-C", "--",
+		"/opt/dra-demo/hugehold", "release", claimUID)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("hugehold release: %w: %s", err, out)
+	}
+	klog.FromContext(ctx).Info("Driver released held hugepage overhead", "uid", claimUID)
+	return nil
 }
 
 func (d *driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletplugin.NamespacedObject) (map[types.UID]error, error) {
@@ -142,7 +187,7 @@ func (d *driver) UnprepareResourceClaims(ctx context.Context, claims []kubeletpl
 	return result, nil
 }
 
-func (d *driver) unprepareResourceClaim(_ context.Context, claim kubeletplugin.NamespacedObject) (err error) {
+func (d *driver) unprepareResourceClaim(ctx context.Context, claim kubeletplugin.NamespacedObject) (err error) {
 	start := time.Now()
 	defer func() {
 		metrics.ObserveUnprepareClaim(err, time.Since(start))
@@ -150,6 +195,10 @@ func (d *driver) unprepareResourceClaim(_ context.Context, claim kubeletplugin.N
 
 	if err = d.state.Unprepare(claim.UID); err != nil {
 		return fmt.Errorf("error unpreparing devices for claim %v: %w", claim.UID, err)
+	}
+
+	if err = releaseDeclaredOverhead(ctx, string(claim.UID)); err != nil {
+		return err
 	}
 
 	return nil

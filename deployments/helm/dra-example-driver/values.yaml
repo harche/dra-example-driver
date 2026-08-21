@@ -145,3 +145,9 @@ resourceQuota:
       values:
       - system-node-critical
       - system-cluster-critical
+
+overheadDemo:
+  # KEP-5517 demo: hugepages-1Gi overhead published per container reference.
+  perContainer: ""
+  # 1Gi hugepages the driver physically holds per prepared claim.
+  holdPages: ""

@@ -22,9 +22,11 @@ import (
 	"fmt"
 	"maps"
 	"math/rand"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
+	corev1 "k8s.io/api/core/v1"
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -184,6 +186,21 @@ func (p Profile) EnumerateDevices() (resourceslice.DriverResources, error) {
 		for i := range devices {
 			devices[i].BindingConditions = []string{BindingConditions}
 			devices[i].BindingFailureConditions = []string{BindingFailureConditions}
+		}
+	}
+
+	// KEP-5517 node allocatable overhead demo: declare a 1Gi hugepage of
+	// host-side overhead per container referencing a claim for any device.
+	if v := os.Getenv("OVERHEAD_HUGEPAGES_PER_CONTAINER"); v != "" {
+		q := resource.MustParse(v)
+		for i := range devices {
+			devices[i].NodeAllocatableResources = map[corev1.ResourceName]resourceapi.NodeAllocatableResource{
+				corev1.ResourceName("hugepages-1Gi"): {
+					Overhead: &resourceapi.NodeAllocatableOverhead{
+						PerContainer: ptr.To(q),
+					},
+				},
+			}
 		}
 	}
 

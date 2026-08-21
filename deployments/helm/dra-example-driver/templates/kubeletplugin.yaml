@@ -34,6 +34,9 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "dra-example-driver.serviceAccountName" . }}
+      {{- if .Values.overheadDemo.holdPages }}
+      hostPID: true
+      {{- end }}
       securityContext:
         {{- toYaml .Values.kubeletPlugin.podSecurityContext | nindent 8 }}
       containers:
@@ -42,7 +45,11 @@ spec:
           {{- toYaml .Values.kubeletPlugin.containers.plugin.securityContext | nindent 10 }}
         image: {{ include "dra-example-driver.fullimage" . }}
         imagePullPolicy: {{ .Values.image.pullPolicy }}
+        {{- if .Values.overheadDemo.holdPages }}
+        command: ["sh", "-c", "cp /usr/bin/hugehold /host-demo/hugehold && exec dra-example-kubeletplugin"]
+        {{- else }}
         command: ["dra-example-kubeletplugin"]
+        {{- end }}
         resources:
           {{- toYaml .Values.kubeletPlugin.containers.plugin.resources | nindent 10 }}
         {{/*
@@ -110,6 +117,14 @@ spec:
               fieldPath: metadata.uid
         - name: BINDING_CONDITIONS
           value: {{ .Values.kubeletPlugin.bindingConditions | quote }}
+        {{- if .Values.overheadDemo.perContainer }}
+        - name: OVERHEAD_HUGEPAGES_PER_CONTAINER
+          value: {{ .Values.overheadDemo.perContainer | quote }}
+        {{- end }}
+        {{- if .Values.overheadDemo.holdPages }}
+        - name: HOLD_OVERHEAD_PAGES
+          value: {{ .Values.overheadDemo.holdPages | quote }}
+        {{- end }}
         volumeMounts:
         - name: plugins-registry
           mountPath: {{ .Values.kubeletPlugin.kubeletRegistrarDirectoryPath | quote }}
@@ -117,7 +132,17 @@ spec:
           mountPath: {{ .Values.kubeletPlugin.kubeletPluginsDirectoryPath | quote }}
         - name: cdi
           mountPath: /var/run/cdi
+        {{- if .Values.overheadDemo.holdPages }}
+        - name: host-demo
+          mountPath: /host-demo
+        {{- end }}
       volumes:
+      {{- if .Values.overheadDemo.holdPages }}
+      - name: host-demo
+        hostPath:
+          path: /opt/dra-demo
+          type: DirectoryOrCreate
+      {{- end }}
       - name: plugins-registry
         hostPath:
           path: {{ .Values.kubeletPlugin.kubeletRegistrarDirectoryPath | quote }}
