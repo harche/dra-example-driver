@@ -1,0 +1,45 @@
+# KEP-5517 hugepage overhead reproducer, pod 2: a plain pod, no DRA at all,
+# that requests 2 x 1Gi hugepages in its spec and actually maps them.
+# Node pool is 4 pages; the driver holds 2 for pod 1's claim and pod 1's
+# worker maps 1 of its own, so only 1 page is physically free.
+#   sum ledger:  3 (pod1) + 2 = 5 > 4  -> Pending, Insufficient hugepages-1Gi
+#   peak ledger: 2 (pod1) + 2 = 4 <= 4 -> scheduled, then mmap fails: the
+#                pool physically has only 1 free page.
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: hp-demo
+  name: hugepage-user
+spec:
+  restartPolicy: Never
+  volumes:
+  - name: hp
+    emptyDir:
+      medium: HugePages-1Gi
+  containers:
+  - name: consumer
+    image: python:3.12-alpine
+    command:
+    - python3
+    - -c
+    - |
+      import mmap, os, time
+      f = os.open('/hugepages/data', os.O_CREAT | os.O_RDWR)
+      size = 2 << 30
+      os.ftruncate(f, size)
+      m = mmap.mmap(f, size)
+      for off in range(0, size, 1 << 30):
+          m[off] = 1
+      print('allocated 2 x 1Gi hugepages, sleeping', flush=True)
+      time.sleep(10**8)
+    volumeMounts:
+    - name: hp
+      mountPath: /hugepages
+    resources:
+      requests:
+        memory: 256Mi
+        hugepages-1Gi: 2Gi
+      limits:
+        memory: 256Mi
+        hugepages-1Gi: 2Gi

@@ -1,0 +1,78 @@
+# KEP-5517 hugepage overhead reproducer, pod 1: claims one GPU from
+# dra-example-driver, which declares hugepages-1Gi perContainer=1Gi overhead
+# and physically holds perContainer x 2 references = 2 x 1Gi hugepages from
+# NodePrepareResources until NodeUnprepareResources.
+#
+# The worker also requests and maps 1 x 1Gi hugepage of its own, so the main
+# phase spec footprint (1Gi) matches the init phase DRA footprint (1Gi) and
+# the peak fold has something to fold into:
+#   sum ledger:  max-spec(1Gi) + 2 x 1Gi overhead        = 3Gi
+#   peak ledger: max(0 + 1Gi, 1Gi) + 1Gi podLifetime      = 2Gi
+# Physical usage while running: 2 (driver) + 1 (worker) = 3 pages of 4.
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: hp-demo
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: hp-demo
+  name: single-gpu
+spec:
+  spec:
+    devices:
+      requests:
+      - name: gpu
+        exactly:
+          deviceClassName: gpu.example.com
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: hp-demo
+  name: gpu-user
+spec:
+  restartPolicy: Never
+  volumes:
+  - name: hp
+    emptyDir:
+      medium: HugePages-1Gi
+  initContainers:
+  - name: holder
+    image: busybox:latest
+    command: ["/bin/sh", "-c", "echo init container referenced the claim, exiting"]
+    resources:
+      claims:
+      - name: gpu
+  containers:
+  - name: worker
+    image: python:3.12-alpine
+    command:
+    - python3
+    - -c
+    - |
+      import mmap, os, time
+      f = os.open('/hugepages/data', os.O_CREAT | os.O_RDWR)
+      size = 1 << 30
+      os.ftruncate(f, size)
+      m = mmap.mmap(f, size)
+      m[0] = 1
+      print('worker mapped its own 1 x 1Gi hugepage, sleeping', flush=True)
+      time.sleep(10**8)
+    volumeMounts:
+    - name: hp
+      mountPath: /hugepages
+    resources:
+      requests:
+        memory: 128Mi
+        hugepages-1Gi: 1Gi
+      limits:
+        memory: 128Mi
+        hugepages-1Gi: 1Gi
+      claims:
+      - name: gpu
+  resourceClaims:
+  - name: gpu
+    resourceClaimTemplateName: single-gpu
